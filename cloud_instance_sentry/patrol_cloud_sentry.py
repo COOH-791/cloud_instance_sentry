@@ -9,7 +9,7 @@ import argparse
 import logging
 
 # 引用工具类
-from utils import OpenAPIAdmin, ConfigEncryptAK, send_message
+from utils import OpenAPIAdmin, ConfigEncryptAK, send_message, send_feishu_card
 
 logging.basicConfig(filename='./error.log', level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
@@ -89,29 +89,34 @@ class CloudPatrolReport(object):
                 content = "尊敬的{0}，本次巡检未发现小于 {1} 天到期的资源。".format(user_init['username'], user_init['overdue_day'])
                 # 调用发送
                 res = send_message(content, user_init['webhook'])
-                logging.info('send_message_response {0}'.format(res))
+                logging.info('send_ding_message_response {0}'.format(res))
 
             return True
 
-        # 按照剩余天数进行排序，升序
+        # 按照剩余天数进行排序，升序，该列表是到期实例的详细信息
         overdue_day_list = sorted(overdue_day_instance, key=lambda i: i['剩余天数'], reverse=False)
 
-        # 以上是钉钉通知的模版
-        content = '## 【{0} - 到期实例巡检告警】\n\n'.format(overdue_day_list[0]['用户名'])
+        if user_init['webhook_type'] == 'dingtalk':
+            # 以上是钉钉通知的模版
+            content = '## 【{0} - 到期实例巡检告警】\n\n'.format(overdue_day_list[0]['用户名'])
 
-        # 组织列表，这里可以使用分片确认消息列表的长度，由用户指定
-        for i in overdue_day_list[0: int(user_init['max_list_length'])]:
-            content += '>**实例类型**：{0}\n\n>**实例 ID**：{1} \n\n>{2}\n\n >**到期时间**：{3}\n\n****\n'.format(i['实例类型'],
-                                                                                                     i['实例ID'],
-                                                                                                     self.colour_settings(
-                                                                                                         i['剩余天数']),
-                                                                                                     i['到期时间'])
+            # 组织列表，这里可以使用分片确认消息列表的长度，由用户指定
+            for i in overdue_day_list[0: int(user_init['max_list_length'])]:
+                content += '>**实例类型**：{0}\n\n>**实例 ID**：{1} \n\n>{2}\n\n >**到期时间**：{3}\n\n****\n'.format(i['实例类型'],
+                                                                                                         i['实例ID'],
+                                                                                                         self.colour_settings(
+                                                                                                             i['剩余天数']),
+                                                                                                         i['到期时间'])
+            # 总结性统计分析
+            summary_text = self.analysis_table(overdue_day_list, user_init)
 
-        # 总结性统计分析
-        summary_text = self.analysis_table(overdue_day_list, user_init)
-
-        # 调用发送
-        send_message(content + summary_text, user_init['webhook'])
+            # 调用发送
+            rs = send_message(content + summary_text, user_init['webhook'])
+            logging.info('dingding 消息返回结果： ' + str(rs))
+        elif user_init['webhook_type'] == 'feishu':
+            # 调用飞书卡片消息推送
+            rs = send_feishu_card(overdue_day_list, user_init)
+            logging.info('feishu 消息返回结果： ' + str(rs))
 
     def analysis_table(self, overdue_day_list: list, user_init: dict):
         """
@@ -231,7 +236,8 @@ class CloudPatrolReport(object):
                     'amount_threshold': ini_data.get('amount_threshold', self.g_available_amount),
                     'max_list_length': ini_data.get('max_list_length', self.max_list_length),
                     'ping': ini_data.get('ping', self.ping),
-                    'amount_invisible': ini_data.get('amount_invisible', self.amount_invisible)
+                    'amount_invisible': ini_data.get('amount_invisible', self.amount_invisible),
+                    'webhook_type': self.get_webhook_type(ini_data.get('webhook', self.g_webhook))
                 }
 
                 user_config.append(tem_user_cof)
@@ -256,6 +262,18 @@ class CloudPatrolReport(object):
         except Exception as e:
             logging.error('Configuration file parsing error: {}'.format(e))
             sys.exit(0)
+
+    @staticmethod
+    def get_webhook_type(user_webhook: str):
+        """
+        判断用户给的 webhook 是钉钉还是飞书，如果都没识别到，直接当钉钉处理
+        """
+        if user_webhook.find('dingtalk') != -1:
+            return 'dingtalk'
+        elif user_webhook.find('feishu') != -1:
+            return 'feishu'
+        else:
+            return 'dingtalk'
 
 
 if __name__ == '__main__':

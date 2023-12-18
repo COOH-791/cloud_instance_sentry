@@ -171,6 +171,151 @@ class ConfigEncryptAK(object):
         return decrypt_str.decode('utf-8')
 
 
+def make_amount_detail(user_init: dict):
+    """
+    飞书消息，涉及余额计算
+    """
+    # 先判断是否要隐藏余额
+    if user_init['amount_invisible'] == 'on':
+        return '******', '余额已被隐藏'
+
+    # 再判断是否采集到了余额
+    if user_init['available_amount'] == 'error':
+        return '******', '余额未采集到'
+
+    # 判断用户余额是否大于用户设置的阈值
+    if float(user_init['available_amount'].replace(',', '')) > float(user_init['amount_threshold'].replace(',', '')):
+        return user_init['available_amount'], '当前余额充足'
+    else:
+        return user_init['available_amount'], '余额不足需计划充值'
+
+
+def send_feishu_card(overdue_day_list: list, user_ini: dict):
+    """
+    发送飞书卡片消息
+    """
+    headers = {'Content-Type': 'application/json'}
+    # 卡片标题
+    alert_headers = "{0}-到期实例巡检告警".format(user_ini['username'])
+    # 费用相关计算
+    amount_num, amount_text = make_amount_detail(user_ini)
+    # message_body: 请求信息主体
+    message_body = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {
+                "wide_screen_mode": True
+            },
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "**即将到期实例总览:**"
+                },
+                {
+                    "tag": "column_set",
+                    "flex_mode": "bisect",
+                    "background_style": "grey",
+                    "horizontal_spacing": "default",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "markdown",
+                                    "text_align": "center",
+                                    "content": "即将到期实例总数：\n**<font color='red'>{0} 个</font>**\n<font color='green'>近 {1} 天到期的资源数量</font>".format(
+                                        len(overdue_day_list), user_ini['overdue_day'])
+                                }
+                            ]
+                        },
+                        {
+                            "tag": "column",
+                            "width": "weighted",
+                            "weight": 1,
+                            "elements": [
+                                {
+                                    "tag": "markdown",
+                                    "text_align": "center",
+                                    "content": "当前账户余额：\n**<font color='red'>{0} ¥</font>**\n<font color='green'>{1}</font>".format(
+                                        amount_num, amount_text)
+                                }
+                            ]
+                        },
+                    ]
+                },
+                {
+                    "tag": "hr"
+                },
+                {
+                    "tag": "markdown",
+                    "content": "**即将到期实例详细:**"
+                },
+                {
+                    "tag": "hr"
+                },
+
+            ],
+            "header": {
+                "template": "wathet",
+                "title": {
+                    "content": alert_headers,
+                    "tag": "plain_text",
+
+                }
+            }
+        }}
+
+    for i in overdue_day_list[0: int(user_ini['max_list_length'])]:
+        tem = {
+            "tag": "markdown",
+            "content": "**实例类型：** {0}\n**实例 ID：** {1}\n**剩余天数：** <text_tag color='{4}'>{2}</text_tag>\n**到期日期：** {3}".format(
+                i['实例类型'],
+                i['实例ID'],
+                i['剩余天数'],
+                i['到期时间'],
+                'orange' if int(i['剩余天数']) >= 7 else 'red'
+            )
+        }
+
+        message_body['card']['elements'].append(tem)
+        message_body['card']['elements'].append({"tag": "hr"})
+
+    # 提供跳转续费按钮
+    url_info = {
+        "actions": [{
+            "tag": "button",
+            "text": {
+                "content": "登入阿里云控制台续费",
+                "tag": "lark_md"
+            },
+            "url": "https://signin.aliyun.com/login.htm?callback=https%3A%2F%2Fusercenter2.aliyun.com%2Frenew%2Fmanual%3Fspm%3D5176.19907426.top-nav.ditem-renew.7bba1450E5iXpi%26expiresIn%3D%26commodityCode%3D#/main",
+            "type": "default",
+            "value": {}
+        }],
+        "tag": "action"
+    }
+
+    summary_text = {
+        "tag": "note",
+        "elements": [
+            {
+
+                "tag": "plain_text",
+                "content": "本次巡检发现到期时间小于 {0} 天的资源有 {1} 个，上方列表只显示 TOP {2}，资源到期未及时续费可能会导致服务中断，建议及时核实续费。".format(
+                    user_ini['overdue_day'], len(overdue_day_list), user_ini['max_list_length']
+                )
+            }]}
+
+    message_body['card']['elements'].append(dict(summary_text))
+    message_body['card']['elements'].append(dict(url_info))
+
+    # 调用发送
+    response = requests.request("POST", user_ini['webhook'], headers=headers, data=json.dumps(message_body))
+    return response.text
+
+
 def send_ding(content, user_webhook):
     header = {
         "Content-Type": "application/json",
@@ -196,18 +341,16 @@ def send_ding(content, user_webhook):
 
 def send_feishu(content, user_webhook):
     """
-    发送飞书通知方法
+    发送普通飞书通知方法
     :param content: 消息内容
-    :param webhook: 群 token
+    :param user_webhook: 群 token
     :return:
     """
-    # webhook：飞书群地址url
-    webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/63856c7d-45c0-43c8-96db-c1f3fb5aafa1"
     # headers: 请求头
     headers = {'Content-Type': 'application/json'}
 
     # alert_headers: 告警消息标题
-    alert_headers = "飞书测试"
+    alert_headers = "阿里云到期实例巡检"
     # alert_content: 告警消息内容，用户可根据自身业务内容，定义告警内容
     alert_content = content
     # message_body: 请求信息主体
@@ -225,15 +368,15 @@ def send_feishu(content, user_webhook):
                 }
             ],
             "header": {
-                "template": "red",
+                "template": "green",
                 "title": {
                     "content": alert_headers,
                     "tag": "plain_text"
                 }
             }
         }}
-    response = requests.request("POST", webhook, headers=headers, data=json.dumps(message_body))
-    print(response.text)
+    response = requests.request("POST", user_webhook, headers=headers, data=json.dumps(message_body))
+    # print(response.text)
     return str(response.text)
 
 

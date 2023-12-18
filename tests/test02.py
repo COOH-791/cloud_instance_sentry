@@ -1,42 +1,32 @@
-import requests
-import json
+numtext = "213527.92"
 
 
-def post_to_robot():
-    # https://open.feishu.cn/document/common-capabilities/message-card/message-cards-content/using-markdown-tags
-    # webhook：飞书群地址url
-    webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/63856c7d-45c0-43c8-96db-c1f3fb5aafa1"
-    # headers: 请求头
-    headers = {'Content-Type': 'application/json'}
+def number_to_rmb(num_text: str):
+    """
+    将数字转换为人民币书写格式
+    """
+    num_text = '{:.2f}'.format(eval(num_text))
+    num_dx = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖']
+    rmb_unit = ['分', '角', '元', '拾', '佰', '仟', '万', '拾', '佰', '仟', '亿']
+    temp_text = '零'
+    temp_id = 0
 
-    # alert_headers: 告警消息标题
-    alert_headers = "飞书测试"
-    # alert_content: 告警消息内容，用户可根据自身业务内容，定义告警内容
-    alert_content = "普通文本\n标准emoji😁😢🌞💼🏆❌✅\n*斜体*\n**粗体**\n~~删除线~~\n[文字链接](www.example.com)\n[差异化跳转]($urlVal)\n<at id=all></at>"
-    # message_body: 请求信息主体
-    message_body = {
-        "msg_type": "interactive",
-        "card": {
-            "config": {
-                "wide_screen_mode": True
-            },
-            "elements": [
-                {
-                    "tag": "markdown",
-                    "content": alert_content,
+    for i in num_text[::-1]:
+        if i != '.':
+            if int(i) == 0:
+                if rmb_unit[temp_id] in ['元', '万']:
+                    temp_text = rmb_unit[temp_id] + temp_text
+                elif temp_text[0] not in ['零', '元', '万']:
+                    temp_text = '零' + temp_text
+            else:
+                temp_text = num_dx[int(i)] + rmb_unit[temp_id] + temp_text
+            temp_id += 1
+    temp_text = temp_text[:-1]
 
-                }
-            ],
-            "header": {
-                "template": "red",
-                "title": {
-                    "content": alert_headers,
-                    "tag": "plain_text"
-                }
-            }
-        }}
-    response = requests.request("POST", webhook, headers=headers, data=json.dumps(message_body))
-    print(response.text)
+    if '亿万' in temp_text:
+        temp_text = temp_text.replace('亿万', '亿')
+
+    return temp_text
 
 
-post_to_robot()
+number_to_rmb("213527.12")
